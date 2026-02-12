@@ -8,7 +8,7 @@
 }:
 let
   cfg = config.ghaf.hardware.nvidia.orin.nx;
-  ethPciDevice = "0008:01:00.0";
+  ethPciDevice = "0007:01:00.0";
 in
 {
   options.ghaf.hardware.nvidia.orin.nx.enableNetvmEthernetPCIPassthrough =
