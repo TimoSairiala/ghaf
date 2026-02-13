@@ -54,6 +54,33 @@ in
     # Orin NX Ethernet card PCI Passthrough
     ghaf.hardware.nvidia.orin.enablePCIPassthroughCommon = true;
 
+    # Bind bridge+NIC early to prevent pcieport from claiming the root port
+    boot.initrd.kernelModules = [
+      "vfio_pci"
+      "vfio_iommu_type1"
+      "vfio"
+    ];
+    boot.initrd.preDeviceCommands = ''
+      DEVICES="${ethPciBridge} ${ethPciDevice}"
+      TIMEOUT=60
+      for DEV in $DEVICES; do
+        ELAPSED=0
+        while [ ! -e /sys/bus/pci/devices/$DEV ]; do
+          if [ $ELAPSED -ge $TIMEOUT ]; then
+            echo "initrd: timeout waiting for PCI device $DEV"
+            exit 1
+          fi
+          sleep 1
+          ELAPSED=$((ELAPSED + 1))
+        done
+        echo vfio-pci > /sys/bus/pci/devices/$DEV/driver_override
+      done
+      modprobe vfio-pci
+      for DEV in $DEVICES; do
+        echo $DEV > /sys/bus/pci/drivers/vfio-pci/bind || true
+      done
+    '';
+
     # Bind the full IOMMU group to vfio-pci before NetVM starts
     systemd.services."netvm-vfio-bind" = {
       description = "Bind NetVM IOMMU group devices to vfio-pci";
