@@ -10,6 +10,42 @@ let
   cfg = config.ghaf.hardware.nvidia.orin.nx;
   ethPciDevice = "0007:01:00.0";
   ethPciBridge = "0007:00:00.0";
+  bindNetvmIommuGroup = ''
+    ${pkgs.bash}/bin/bash -euo pipefail -c "
+    TARGET_DEV=${ethPciDevice};
+    TIMEOUT=60;
+
+    ELAPSED=0;
+    while [ ! -e /sys/bus/pci/devices/$TARGET_DEV/iommu_group ]; do
+      if [ $ELAPSED -ge $TIMEOUT ]; then
+        echo \"Timeout reached: IOMMU group for $TARGET_DEV did not appear after $TIMEOUT seconds.\";
+        exit 1;
+      fi;
+      echo \"Waiting for IOMMU group for $TARGET_DEV... $ELAPSED/$TIMEOUT seconds\";
+      sleep 1;
+      ELAPSED=$((ELAPSED + 1));
+    done;
+
+    GROUP=$(readlink -f /sys/bus/pci/devices/$TARGET_DEV/iommu_group);
+    if [ -z \"$GROUP\" ] || [ ! -d \"$GROUP/devices\" ]; then
+      echo \"IOMMU group path not found for $TARGET_DEV.\";
+      exit 1;
+    fi;
+
+    echo \"Binding all devices in IOMMU group: $GROUP\";
+    ${pkgs.kmod}/bin/modprobe vfio-pci;
+
+    for DEVPATH in \"$GROUP\"/devices/*; do
+      DEV=$(basename \"$DEVPATH\");
+      echo \"Binding $DEV to vfio-pci\";
+      echo vfio-pci > /sys/bus/pci/devices/$DEV/driver_override;
+      if [ -e /sys/bus/pci/devices/$DEV/driver/unbind ]; then
+        echo $DEV > /sys/bus/pci/devices/$DEV/driver/unbind;
+      fi;
+      echo $DEV > /sys/bus/pci/drivers/vfio-pci/bind;
+    done;
+    "
+  '';
 in
 {
   options.ghaf.hardware.nvidia.orin.nx.enableNetvmEthernetPCIPassthrough =
@@ -18,37 +54,17 @@ in
     # Orin NX Ethernet card PCI Passthrough
     ghaf.hardware.nvidia.orin.enablePCIPassthroughCommon = true;
 
-    # Wait up to 60 seconds for ethernet PCI to get enumerated and bind the full IOMMU group to vfio-pci
-    systemd.services."microvm-pci-devices@net-vm".serviceConfig.ExecStartPre = ''
-      ${pkgs.bash}/bin/bash -euo pipefail -c "
-      DEVICES=(${ethPciBridge} ${ethPciDevice});
-      TIMEOUT=60;
-      for DEV in \"''${DEVICES[@]}\"; do
-        ELAPSED=0;
-        while [ ! -e /sys/bus/pci/devices/$DEV ]; do
-          if [ $ELAPSED -ge $TIMEOUT ]; then
-            echo \"Timeout reached: PCI device $DEV did not appear after $TIMEOUT seconds.\";
-            exit 1;
-          fi;
-          echo \"Waiting for PCI device $DEV... $ELAPSED/$TIMEOUT seconds\";
-          sleep 1;
-          ELAPSED=$((ELAPSED + 1));
-        done;
-        echo \"PCI device $DEV is present.\";
-      done;
-      ${pkgs.kmod}/bin/modprobe vfio-pci;
-      for DEV in \"''${DEVICES[@]}\"; do
-        echo vfio-pci > /sys/bus/pci/devices/$DEV/driver_override;
-        if [ -e /sys/bus/pci/devices/$DEV/driver/unbind ]; then
-          echo $DEV > /sys/bus/pci/devices/$DEV/driver/unbind;
-        elif [ -e /sys/bus/pci/drivers/pcieport/unbind ]; then
-          echo $DEV > /sys/bus/pci/drivers/pcieport/unbind;
-        fi;
-        echo $DEV > /sys/bus/pci/drivers/vfio-pci/bind;
-      done;
-      echo \"Bound PCI devices to vfio-pci: ''${DEVICES[*]}\";
-      "
-    '';
+    # Bind the full IOMMU group to vfio-pci before NetVM starts
+    systemd.services."netvm-vfio-bind" = {
+      description = "Bind NetVM IOMMU group devices to vfio-pci";
+      before = [ "microvm@net-vm.service" ];
+      wantedBy = [ "microvm@net-vm.service" ];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        ExecStart = bindNetvmIommuGroup;
+      };
+    };
 
     ghaf.virtualization.microvm.netvm.extraModules = [
       {
