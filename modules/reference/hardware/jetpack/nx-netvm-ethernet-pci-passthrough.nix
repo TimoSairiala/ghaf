@@ -60,26 +60,48 @@ in
       "vfio_iommu_type1"
       "vfio"
     ];
-    boot.initrd.preDeviceCommands = ''
-      DEVICES="${ethPciBridge} ${ethPciDevice}"
-      TIMEOUT=60
-      for DEV in $DEVICES; do
-        ELAPSED=0
-        while [ ! -e /sys/bus/pci/devices/$DEV ]; do
-          if [ $ELAPSED -ge $TIMEOUT ]; then
-            echo "initrd: timeout waiting for PCI device $DEV"
-            exit 1
-          fi
-          sleep 1
-          ELAPSED=$((ELAPSED + 1))
-        done
-        echo vfio-pci > /sys/bus/pci/devices/$DEV/driver_override
-      done
-      modprobe vfio-pci
-      for DEV in $DEVICES; do
-        echo $DEV > /sys/bus/pci/drivers/vfio-pci/bind || true
-      done
-    '';
+    boot.initrd.systemd.storePaths = [
+      pkgs.bash
+      pkgs.coreutils
+      pkgs.kmod
+    ];
+    boot.initrd.systemd.services.netvm-vfio-bind-initrd = {
+      description = "Bind NetVM PCI devices to vfio-pci (initrd)";
+      wantedBy = [ "initrd.target" ];
+      before = [
+        "sysroot.mount"
+        "initrd-root-fs.target"
+      ];
+      unitConfig = {
+        DefaultDependencies = false;
+      };
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        ExecStart = ''
+          ${pkgs.bash}/bin/bash -euo pipefail -c "
+          DEVICES='${ethPciBridge} ${ethPciDevice}';
+          TIMEOUT=60;
+          for DEV in $DEVICES; do
+            ELAPSED=0;
+            while [ ! -e /sys/bus/pci/devices/$DEV ]; do
+              if [ $ELAPSED -ge $TIMEOUT ]; then
+                echo \"initrd: timeout waiting for PCI device $DEV\";
+                exit 1;
+              fi;
+              ${pkgs.coreutils}/bin/sleep 1;
+              ELAPSED=$((ELAPSED + 1));
+            done;
+            echo vfio-pci > /sys/bus/pci/devices/$DEV/driver_override;
+          done;
+          ${pkgs.kmod}/bin/modprobe vfio-pci;
+          for DEV in $DEVICES; do
+            echo $DEV > /sys/bus/pci/drivers/vfio-pci/bind || true;
+          done;
+          "
+        '';
+      };
+    };
 
     # Bind the full IOMMU group to vfio-pci before NetVM starts
     systemd.services."netvm-vfio-bind" = {
