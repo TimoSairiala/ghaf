@@ -20,32 +20,34 @@ in
 
     # Wait up to 60 seconds for ethernet PCI to get enumerated and bind the full IOMMU group to vfio-pci
     systemd.services."microvm-pci-devices@net-vm".serviceConfig.ExecStartPre = ''
-      ${pkgs.bash}/bin/bash -euo pipefail -c ' \
-      DEVICES=(${ethPciBridge} ${ethPciDevice}); \
-      TIMEOUT=60; \
-      for DEV in "''${DEVICES[@]}"; do \
-        ELAPSED=0; \
-        while [ ! -e /sys/bus/pci/devices/$DEV ]; do \
-          if [ $ELAPSED -ge $TIMEOUT ]; then \
-            echo "Timeout reached: PCI device $DEV did not appear after $TIMEOUT seconds."; \
-            exit 1; \
-          fi; \
-          echo "Waiting for PCI device $DEV... $ELAPSED/$TIMEOUT seconds"; \
-          sleep 1; \
-          ELAPSED=$((ELAPSED + 1)); \
-        done; \
-        echo "PCI device $DEV is present."; \
-      done; \
-      ${pkgs.kmod}/bin/modprobe vfio-pci; \
-      for DEV in "''${DEVICES[@]}"; do \
-        echo vfio-pci > /sys/bus/pci/devices/$DEV/driver_override; \
-        if [ -e /sys/bus/pci/devices/$DEV/driver/unbind ]; then \
-          echo $DEV > /sys/bus/pci/devices/$DEV/driver/unbind; \
-        fi; \
-        echo $DEV > /sys/bus/pci/drivers/vfio-pci/bind; \
-      done; \
-      echo "Bound PCI devices to vfio-pci: ''${DEVICES[*]}"; \
-      '
+      ${pkgs.bash}/bin/bash -euo pipefail -c "
+      DEVICES=(${ethPciBridge} ${ethPciDevice});
+      TIMEOUT=60;
+      for DEV in \"''${DEVICES[@]}\"; do
+        ELAPSED=0;
+        while [ ! -e /sys/bus/pci/devices/$DEV ]; do
+          if [ $ELAPSED -ge $TIMEOUT ]; then
+            echo \"Timeout reached: PCI device $DEV did not appear after $TIMEOUT seconds.\";
+            exit 1;
+          fi;
+          echo \"Waiting for PCI device $DEV... $ELAPSED/$TIMEOUT seconds\";
+          sleep 1;
+          ELAPSED=$((ELAPSED + 1));
+        done;
+        echo \"PCI device $DEV is present.\";
+      done;
+      ${pkgs.kmod}/bin/modprobe vfio-pci;
+      for DEV in \"''${DEVICES[@]}\"; do
+        echo vfio-pci > /sys/bus/pci/devices/$DEV/driver_override;
+        if [ -e /sys/bus/pci/devices/$DEV/driver/unbind ]; then
+          echo $DEV > /sys/bus/pci/devices/$DEV/driver/unbind;
+        elif [ -e /sys/bus/pci/drivers/pcieport/unbind ]; then
+          echo $DEV > /sys/bus/pci/drivers/pcieport/unbind;
+        fi;
+        echo $DEV > /sys/bus/pci/drivers/vfio-pci/bind;
+      done;
+      echo \"Bound PCI devices to vfio-pci: ''${DEVICES[*]}\";
+      "
     '';
 
     ghaf.virtualization.microvm.netvm.extraModules = [
