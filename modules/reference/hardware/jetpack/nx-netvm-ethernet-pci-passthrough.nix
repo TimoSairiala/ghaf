@@ -82,21 +82,30 @@ in
           ${pkgs.bash}/bin/bash -euo pipefail -c "
           DEVICES='${ethPciBridge} ${ethPciDevice}';
           TIMEOUT=60;
+          log() { echo \"initrd-vfio: $1\" > /dev/kmsg; }
           for DEV in $DEVICES; do
             ELAPSED=0;
             while [ ! -e /sys/bus/pci/devices/$DEV ]; do
               if [ $ELAPSED -ge $TIMEOUT ]; then
-                echo \"initrd: timeout waiting for PCI device $DEV\";
+                log \"timeout waiting for PCI device $DEV\";
                 exit 1;
               fi;
               ${pkgs.coreutils}/bin/sleep 1;
               ELAPSED=$((ELAPSED + 1));
             done;
+            CUR_DRV=$(readlink -f /sys/bus/pci/devices/$DEV/driver 2>/dev/null || true);
+            log \"$DEV current driver: $CUR_DRV\";
             echo vfio-pci > /sys/bus/pci/devices/$DEV/driver_override;
+            log \"$DEV driver_override set to vfio-pci\";
           done;
           ${pkgs.kmod}/bin/modprobe vfio-pci;
           for DEV in $DEVICES; do
-            echo $DEV > /sys/bus/pci/drivers/vfio-pci/bind || true;
+            if [ -e /sys/bus/pci/devices/$DEV/driver/unbind ]; then
+              echo $DEV > /sys/bus/pci/devices/$DEV/driver/unbind || log \"$DEV unbind failed\";
+            fi;
+            echo $DEV > /sys/bus/pci/drivers/vfio-pci/bind || log \"$DEV bind to vfio-pci failed\";
+            CUR_DRV=$(readlink -f /sys/bus/pci/devices/$DEV/driver 2>/dev/null || true);
+            log \"$DEV driver after bind: $CUR_DRV\";
           done;
           "
         '';
